@@ -1,0 +1,20 @@
+meta {
+  name: 1-to-1 Face Match
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/api/v1/face/match
+  body: multipartForm
+  auth: none
+}
+
+headers {
+  X-API-KEY: {{apiKey}}
+}
+
+body:multipart-form {
+  id_card_image: @file(sample_assets/sample_id_card.jpg)
+  live_selfie_image: @file(sample_assets/sample_live_face.jpg)
+}

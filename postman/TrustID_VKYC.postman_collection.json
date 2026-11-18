@@ -1,0 +1,349 @@
+{
+  "info": {
+    "_postman_id": "a93e5d87-3214-4eb5-a202-trustid-vkyc",
+    "name": "TrustID Video KYC API",
+    "description": "Production-grade Video KYC & Anti-Deepfake Verification API collection. Includes sessions, 1:1 biometric matching, active/passive liveness, document OCR parsing, and cryptographic audit records.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://127.0.0.1:8000",
+      "type": "string"
+    },
+    {
+      "key": "apiKey",
+      "value": "trustid_live_demo_key_2026",
+      "type": "string"
+    },
+    {
+      "key": "sessionId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "verificationId",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "System & Health",
+      "item": [
+        {
+          "name": "Health Check",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": ["{{baseUrl}}"],
+              "path": ["health"]
+            },
+            "description": "Checks the operational status of the VKYC engine and AI sub-models."
+          }
+        },
+        {
+          "name": "OpenAPI Specification",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/openapi.json",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "openapi.json"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "1. Sessions & Challenges",
+      "item": [
+        {
+          "name": "Create VKYC Session",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const res = pm.response.json();",
+                  "if (res.session_id) {",
+                  "    pm.collectionVariables.set('sessionId', res.session_id);",
+                  "    console.log('Saved sessionId:', res.session_id);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-API-KEY",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"user_id\": \"usr_fintech_9812\",\n  \"document_type\": \"AADHAAR\",\n  \"callback_url\": \"https://webhook.site/sample-receiver\",\n  \"metadata\": {\n    \"account_tier\": \"gold\",\n    \"branch\": \"mumbai_main\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/sessions/",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "sessions", ""]
+            },
+            "description": "Initializes a KYC session with randomized dynamic challenges (head yaw turns, eye blinks, smiles, voice code)."
+          }
+        },
+        {
+          "name": "Get Session State",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-KEY",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/sessions/{{sessionId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "sessions", "{{sessionId}}"]
+            },
+            "description": "Retrieves the status and assigned challenges of an active session."
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Biometrics & Liveness",
+      "item": [
+        {
+          "name": "Check Passive Liveness",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-API-KEY",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "frame",
+                  "type": "file",
+                  "src": "sample_assets/sample_live_face.jpg"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/liveness/passive",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "liveness", "passive"]
+            },
+            "description": "Single-frame passive anti-spoofing test detecting texture frequency, Moiré patterns, and screen replay."
+          }
+        },
+        {
+          "name": "Check Active Liveness Sequence",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-API-KEY",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "session_id",
+                  "value": "{{sessionId}}",
+                  "type": "text"
+                },
+                {
+                  "key": "frames",
+                  "type": "file",
+                  "src": "sample_assets/sample_live_face.jpg"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/liveness/active",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "liveness", "active"]
+            },
+            "description": "Evaluates a sequence of video keyframes against assigned session challenges."
+          }
+        },
+        {
+          "name": "1-to-1 Face Match",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-API-KEY",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "id_card_image",
+                  "type": "file",
+                  "src": "sample_assets/sample_id_card.jpg"
+                },
+                {
+                  "key": "live_selfie_image",
+                  "type": "file",
+                  "src": "sample_assets/sample_live_face.jpg"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/face/match",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "face", "match"]
+            },
+            "description": "Performs 1:1 facial biometric matching between ID card photo and live face."
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Document Verification",
+      "item": [
+        {
+          "name": "Verify ID Document & OCR",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-API-KEY",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "document_image",
+                  "type": "file",
+                  "src": "sample_assets/sample_id_card.jpg"
+                },
+                {
+                  "key": "extracted_text",
+                  "value": "GOVERNMENT OF INDIA\nAadhaar Card\nRahul Sharma\nDOB: 15/08/1994\nMALE\n9841 2341 5678",
+                  "type": "text"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/document/verify",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "document", "verify"]
+            },
+            "description": "Inspects document image quality, checks for blur/glare tampering, parses fields, and extracts photo."
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. Full VKYC Pipeline",
+      "item": [
+        {
+          "name": "Execute Full VKYC Verification",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const res = pm.response.json();",
+                  "if (res.verification_id) {",
+                  "    pm.collectionVariables.set('verificationId', res.verification_id);",
+                  "    console.log('Saved verificationId:', res.verification_id);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-API-KEY",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "session_id",
+                  "value": "{{sessionId}}",
+                  "type": "text"
+                },
+                {
+                  "key": "id_document",
+                  "type": "file",
+                  "src": "sample_assets/sample_id_card.jpg"
+                },
+                {
+                  "key": "live_frames",
+                  "type": "file",
+                  "src": "sample_assets/sample_live_face.jpg"
+                },
+                {
+                  "key": "extracted_ocr_text",
+                  "value": "GOVERNMENT OF INDIA\nAADHAAR\nRahul Sharma\nDOB: 15/08/1994\nMALE\n9841 2341 5678",
+                  "type": "text"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/verify/full",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "verify", "full"]
+            },
+            "description": "Runs complete orchestration: Document OCR, Deepfake 2D FFT, Active/Passive Anti-Spoofing, 1:1 Face Match, and Cryptographic Audit Dossier generation."
+          }
+        }
+      ]
+    },
+    {
+      "name": "5. Audit & Compliance",
+      "item": [
+        {
+          "name": "Get Cryptographic Audit Dossier",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-KEY",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/audit/{{verificationId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "audit", "{{verificationId}}"]
+            },
+            "description": "Retrieves the SHA-256 HMAC-signed audit certificate for compliance checks."
+          }
+        }
+      ]
+    }
+  ]
+}

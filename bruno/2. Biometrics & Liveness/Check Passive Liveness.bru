@@ -1,0 +1,19 @@
+meta {
+  name: Check Passive Liveness
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/api/v1/liveness/passive
+  body: multipartForm
+  auth: none
+}
+
+headers {
+  X-API-KEY: {{apiKey}}
+}
+
+body:multipart-form {
+  frame: @file(sample_assets/sample_live_face.jpg)
+}

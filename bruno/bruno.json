@@ -1,0 +1,9 @@
+{
+  "version": "1",
+  "name": "TrustID Video KYC",
+  "type": "collection",
+  "ignore": [
+    "node_modules",
+    ".git"
+  ]
+}

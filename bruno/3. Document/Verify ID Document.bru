@@ -1,0 +1,20 @@
+meta {
+  name: Verify ID Document
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/api/v1/document/verify
+  body: multipartForm
+  auth: none
+}
+
+headers {
+  X-API-KEY: {{apiKey}}
+}
+
+body:multipart-form {
+  document_image: @file(sample_assets/sample_id_card.jpg)
+  extracted_text: GOVERNMENT OF INDIA\nAadhaar Card\nRahul Sharma\nDOB: 15/08/1994\nMALE\n9841 2341 5678
+}

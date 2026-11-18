@@ -1,0 +1,28 @@
+meta {
+  name: Execute Full VKYC
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/api/v1/verify/full
+  body: multipartForm
+  auth: none
+}
+
+headers {
+  X-API-KEY: {{apiKey}}
+}
+
+body:multipart-form {
+  session_id: {{sessionId}}
+  id_document: @file(sample_assets/sample_id_card.jpg)
+  live_frames: @file(sample_assets/sample_live_face.jpg)
+  extracted_ocr_text: GOVERNMENT OF INDIA\nAADHAAR\nRahul Sharma\nDOB: 15/08/1994\nMALE\n9841 2341 5678
+}
+
+script:post-response {
+  if (res.body && res.body.verification_id) {
+    bru.setEnvVar("verificationId", res.body.verification_id);
+  }
+}
