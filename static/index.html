@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TrustID — Video KYC & Anti-Deepfake Verification Portal</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+</head>
+<body>
+
+  <header>
+    <div class="logo-container">
+      <div class="logo-icon">🛡️</div>
+      <div class="logo-text">TrustID <span class="badge-tag">VKYC v1.0</span></div>
+    </div>
+    <div class="header-links">
+      <a href="/docs" target="_blank">📖 Swagger API Docs</a>
+      <a href="/redoc" target="_blank">📑 ReDoc</a>
+      <a href="/health" target="_blank">⚡ Health Check</a>
+    </div>
+  </header>
+
+  <main>
+    <div class="hero">
+      <h1>Bank-Grade Video KYC Verification</h1>
+      <p>High-throughput biometric matching, active challenge anti-spoofing, and 2D FFT deepfake detection exposed via developer-friendly REST APIs.</p>
+    </div>
+
+    <div class="grid-layout">
+      <!-- Left Column: Video & Captures -->
+      <div class="card">
+        <div class="card-title">
+          <span>📹 Video Verification Stage</span>
+          <span style="font-size: 0.8rem; color: var(--text-muted);" id="session-id-display">No Session Active</span>
+        </div>
+
+        <div class="video-wrapper">
+          <video id="webcam-video" autoplay playsinline muted></video>
+          <canvas id="canvas-overlay"></canvas>
+          <div class="face-guide-oval"></div>
+
+          <div class="challenge-banner" id="challenge-banner" style="display: none;">
+            <div class="challenge-text" id="challenge-text">Waiting for session initialization...</div>
+          </div>
+        </div>
+
+        <div class="controls-bar">
+          <button class="btn-primary" id="btn-init-session">1. Initialize Session</button>
+          <button class="btn-secondary" id="btn-start-camera">Connect Camera</button>
+          <button class="btn-secondary" id="btn-capture-frames" disabled>2. Capture Frames</button>
+        </div>
+
+        <!-- ID Upload Section -->
+        <div class="id-section">
+          <div class="card-title" style="margin-bottom: 0.8rem;">
+            <span>🪪 ID Document (Aadhaar / Passport / PAN)</span>
+          </div>
+          <label class="upload-dropzone" for="id-card-input">
+            <input type="file" id="id-card-input" accept="image/*" style="display: none;">
+            <div id="id-file-name" style="font-size: 0.9rem; color: var(--text-muted);">
+              📁 Click to upload ID image (or default mock will be used)
+            </div>
+          </label>
+        </div>
+
+        <div style="margin-top: 1.5rem;">
+          <button class="btn-primary" id="btn-submit-verify" style="width: 100%; justify-content: center;" disabled>
+            🚀 3. Run Full VKYC Verification
+          </button>
+        </div>
+      </div>
+
+      <!-- Right Column: Telemetry & Results -->
+      <div class="card">
+        <div class="card-title">
+          <span>📊 Biometric Telemetry & Risk Verdict</span>
+          <span style="font-size: 0.8rem; color: var(--accent-cyan);" id="user-id-display">--</span>
+        </div>
+
+        <div id="results-panel" style="display: none;">
+          <div id="verdict-banner" class="verdict-banner">PENDING</div>
+
+          <!-- Face Match -->
+          <div class="metric-tile">
+            <div class="metric-header">
+              <span>1:1 Biometric Face Match</span>
+              <span id="score-face" class="metric-score">0%</span>
+            </div>
+            <div class="progress-track">
+              <div id="bar-face" class="progress-fill progress-green"></div>
+            </div>
+          </div>
+
+          <!-- Liveness Score -->
+          <div class="metric-tile">
+            <div class="metric-header">
+              <span>Passive Liveness (Anti-Spoof)</span>
+              <span id="score-liveness" class="metric-score">0%</span>
+            </div>
+            <div class="progress-track">
+              <div id="bar-liveness" class="progress-fill progress-cyan"></div>
+            </div>
+          </div>
+
+          <!-- Deepfake Anomaly -->
+          <div class="metric-tile">
+            <div class="metric-header">
+              <span>Deepfake / Synthetic Risk (FFT)</span>
+              <span id="score-deepfake" class="metric-score">0%</span>
+            </div>
+            <div class="progress-track">
+              <div id="bar-deepfake" class="progress-fill progress-yellow"></div>
+            </div>
+          </div>
+
+          <!-- Document OCR Extraction -->
+          <div class="metric-tile">
+            <div class="metric-header">
+              <span>Document Extraction & Tampering</span>
+              <span id="doc-type-val" style="color: var(--accent-cyan); font-weight: 600;">--</span>
+            </div>
+            <div style="font-size: 0.85rem; margin-top: 0.5rem; color: var(--text-muted);">
+              <div>Number: <strong id="doc-number-val" style="color: #fff;">--</strong></div>
+              <div>Name: <strong id="doc-name-val" style="color: #fff;">--</strong></div>
+            </div>
+          </div>
+
+          <!-- Cryptographic Audit Log -->
+          <div style="margin-top: 1rem;">
+            <div style="font-size: 0.8rem; color: var(--text-muted); text-transform: uppercase; font-weight: 600;">
+              Tamper-Proof Audit Hash (SHA-256):
+            </div>
+            <div class="audit-hash-box" id="audit-hash-display">--</div>
+
+            <div style="font-size: 0.8rem; color: var(--text-muted); text-transform: uppercase; font-weight: 600; margin-top: 0.5rem;">
+              HMAC Digital Signature:
+            </div>
+            <div class="audit-hash-box" id="audit-sig-display" style="color: var(--accent-blue);">--</div>
+          </div>
+        </div>
+
+        <!-- Placeholder when results empty -->
+        <div id="results-placeholder" style="text-align: center; padding: 4rem 1rem; color: var(--text-muted);">
+          <div style="font-size: 2.5rem; margin-bottom: 0.8rem;">🔒</div>
+          <div style="font-weight: 600; margin-bottom: 0.3rem;">Ready for Verification</div>
+          <div style="font-size: 0.85rem;">Click 'Initialize Session' and run the full pipeline to view telemetry and cryptographic audit certificates.</div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <footer>
+    TrustID VKYC Verification Service &bull; Built with FastAPI, OpenCV & ONNX &bull; REST API &bull; Compliant with RBI/FATF Standards
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
