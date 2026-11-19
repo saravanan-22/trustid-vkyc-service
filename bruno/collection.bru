@@ -1,0 +1,29 @@
+headers {
+  X-API-KEY: {{apiKey}}
+}
+
+vars:pre-request {
+  baseUrl: http://127.0.0.1:8000
+}
+
+docs {
+  # TrustID Video KYC & Anti-Deepfake Verification API
+
+  Bank-grade Video KYC verification service exposed as a developer-friendly REST API.
+
+  ## Configuration (Environment: "Local")
+
+  | Variable | Purpose | Default |
+  |---|---|---|
+  | `baseUrl` | Server Address | `http://127.0.0.1:8000` |
+  | `apiKey` | API Key Header (`X-API-KEY`) | `trustid_live_demo_key_2026` |
+  | `sessionId` | Active KYC Session ID | Populated automatically by **1. Sessions -> Create VKYC Session** |
+  | `verificationId` | Audit Verification ID | Populated automatically by **4. Verification -> Execute Full VKYC** |
+
+  ## Verification Flow
+
+  1. Select the **Local** environment in Bruno (top-right).
+  2. Run **1. Sessions -> Create VKYC Session**: Generates random behavioral challenges and saves `sessionId`.
+  3. Run **4. Verification -> Execute Full VKYC**: Coordinates OCR, 2D FFT Deepfake detection, active/passive liveness, and 1:1 facial biometric matching. Saves `verificationId`.
+  4. Run **5. Audit -> Get Audit Dossier**: Retrieves and verifies the cryptographic SHA-256 HMAC-signed audit certificate.
+}
