@@ -47,3 +47,6 @@ logs/
 audit_reports/
 temp_uploads/
 data/
+
+# Downloaded model weights (scripts/download_models.py)
+models/

@@ -1,6 +1,4 @@
-import cv2
 import numpy as np
-import pytest
 from app.services.deepfake_detector import deepfake_detector
 
 

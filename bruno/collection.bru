@@ -7,16 +7,16 @@ vars:pre-request {
 }
 
 docs {
-  # TrustID Video KYC & Anti-Deepfake Verification API
+  # TrustID Video KYC API
 
-  Bank-grade Video KYC verification service exposed as a developer-friendly REST API.
+  Reference implementation of a Video KYC verification REST API (not a certified KYC product).
 
   ## Configuration (Environment: "Local")
 
   | Variable | Purpose | Default |
   |---|---|---|
   | `baseUrl` | Server Address | `http://127.0.0.1:8000` |
-  | `apiKey` | API Key Header (`X-API-KEY`) | `trustid_live_demo_key_2026` |
+  | `apiKey` | API Key Header (`X-API-KEY`) | *(empty: set it to one of the server's `TRUSTID_API_KEYS`)* |
   | `sessionId` | Active KYC Session ID | Populated automatically by **1. Sessions -> Create VKYC Session** |
   | `verificationId` | Audit Verification ID | Populated automatically by **4. Verification -> Execute Full VKYC** |
 
@@ -24,6 +24,6 @@ docs {
 
   1. Select the **Local** environment in Bruno (top-right).
   2. Run **1. Sessions -> Create VKYC Session**: Generates random behavioral challenges and saves `sessionId`.
-  3. Run **4. Verification -> Execute Full VKYC**: Coordinates OCR, 2D FFT Deepfake detection, active/passive liveness, and 1:1 facial biometric matching. Saves `verificationId`.
-  4. Run **5. Audit -> Get Audit Dossier**: Retrieves and verifies the cryptographic SHA-256 HMAC-signed audit certificate.
+  3. Run **4. Verification -> Execute Full VKYC**: runs document checks, liveness, 1:1 face matching and the synthetic-media heuristics, then saves `verificationId`. It sends one still photo, so the expected verdict is **REJECTED** (`ACTIVE_LIVENESS_FAILED`); a real run needs the ordered webcam frames captured by the demo portal at `/`.
+  4. Run **5. Audit -> Get Audit Dossier**: returns the dossier after recomputing its hash and checking its HMAC signature.
 }

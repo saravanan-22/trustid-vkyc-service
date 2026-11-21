@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>TrustID — Video KYC & Anti-Deepfake Verification Portal</title>
+  <title>TrustID VKYC Demo</title>
   <link rel="stylesheet" href="/static/style.css">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -14,7 +14,7 @@
   <header>
     <div class="logo-container">
       <div class="logo-icon">🛡️</div>
-      <div class="logo-text">TrustID <span class="badge-tag">VKYC v1.0</span></div>
+      <div class="logo-text">TrustID <span class="badge-tag">VKYC demo</span></div>
     </div>
     <div class="header-links">
       <a href="/docs" target="_blank">📖 Swagger API Docs</a>
@@ -25,8 +25,8 @@
 
   <main>
     <div class="hero">
-      <h1>Bank-Grade Video KYC Verification</h1>
-      <p>High-throughput biometric matching, active challenge anti-spoofing, and 2D FFT deepfake detection exposed via developer-friendly REST APIs.</p>
+      <h1>Video KYC Verification Demo</h1>
+      <p>Developer test portal for the TrustID API: document checks, active liveness challenges, 1:1 face matching and a signed audit trail. Reference implementation, not a certified KYC product.</p>
     </div>
 
     <div class="grid-layout">
@@ -47,6 +47,14 @@
           </div>
         </div>
 
+        <div class="id-section" style="margin-top: 0; margin-bottom: 1rem;">
+          <label for="api-key-input" style="font-size: 0.85rem; color: var(--text-muted);">
+            API key (developer testing only; kept in this tab's session storage. In production your backend creates sessions, so keys never reach the browser.)
+          </label>
+          <input type="password" id="api-key-input" autocomplete="off" placeholder="Paste a key from TRUSTID_API_KEYS"
+                 style="width: 100%; margin-top: 0.4rem; padding: 0.6rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.15); background: rgba(0,0,0,0.25); color: #fff;">
+        </div>
+
         <div class="controls-bar">
           <button class="btn-primary" id="btn-init-session">1. Initialize Session</button>
           <button class="btn-secondary" id="btn-start-camera">Connect Camera</button>
@@ -61,9 +69,11 @@
           <label class="upload-dropzone" for="id-card-input">
             <input type="file" id="id-card-input" accept="image/*" style="display: none;">
             <div id="id-file-name" style="font-size: 0.9rem; color: var(--text-muted);">
-              📁 Click to upload ID image (or default mock will be used)
+              📁 Click to upload an ID image (required). Try sample_assets/sample_id_card.jpg
             </div>
           </label>
+          <textarea id="ocr-text-input" rows="3" placeholder="Optional: document text, used only when server-side OCR (Tesseract) is not installed"
+                    style="width: 100%; margin-top: 0.6rem; padding: 0.6rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.15); background: rgba(0,0,0,0.25); color: #fff; font-family: inherit;"></textarea>
         </div>
 
         <div style="margin-top: 1.5rem;">
@@ -97,7 +107,7 @@
           <!-- Liveness Score -->
           <div class="metric-tile">
             <div class="metric-header">
-              <span>Passive Liveness (Anti-Spoof)</span>
+              <span>Passive Liveness (heuristic)</span>
               <span id="score-liveness" class="metric-score">0%</span>
             </div>
             <div class="progress-track">
@@ -108,7 +118,7 @@
           <!-- Deepfake Anomaly -->
           <div class="metric-tile">
             <div class="metric-header">
-              <span>Deepfake / Synthetic Risk (FFT)</span>
+              <span>Synthetic-Media Signal (FFT heuristic)</span>
               <span id="score-deepfake" class="metric-score">0%</span>
             </div>
             <div class="progress-track">
@@ -125,7 +135,14 @@
             <div style="font-size: 0.85rem; margin-top: 0.5rem; color: var(--text-muted);">
               <div>Number: <strong id="doc-number-val" style="color: #fff;">--</strong></div>
               <div>Name: <strong id="doc-name-val" style="color: #fff;">--</strong></div>
+              <div>Text source: <strong id="doc-source-val" style="color: #fff;">--</strong></div>
             </div>
+          </div>
+
+          <!-- Decision reasons -->
+          <div class="metric-tile">
+            <div class="metric-header"><span>Decision reasons</span></div>
+            <ul id="reasons-list" style="font-size: 0.85rem; margin: 0.5rem 0 0 1rem; color: var(--text-muted);"></ul>
           </div>
 
           <!-- Cryptographic Audit Log -->
@@ -153,7 +170,7 @@
   </main>
 
   <footer>
-    TrustID VKYC Verification Service &bull; Built with FastAPI, OpenCV & ONNX &bull; REST API &bull; Compliant with RBI/FATF Standards
+    TrustID VKYC &bull; FastAPI, OpenCV YuNet/SFace &bull; Reference implementation, not certified for regulated use
   </footer>
 
   <script src="/static/app.js"></script>

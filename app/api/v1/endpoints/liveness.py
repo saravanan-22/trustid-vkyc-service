@@ -1,74 +1,52 @@
-import cv2
-import numpy as np
 from typing import List
+
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from starlette.concurrency import run_in_threadpool
+
+from app.api.deps import load_owned_session
+from app.core.images import read_frames, read_image
 from app.core.security import verify_api_key
+from app.schemas.session import SessionStatus
 from app.schemas.verification import LivenessMetrics
 from app.services.liveness_service import liveness_service
-from app.api.v1.endpoints.sessions import active_sessions
 
 router = APIRouter()
-
-
-def decode_image_bytes(data: bytes) -> np.ndarray:
-    """Decodes binary image bytes into OpenCV BGR numpy array."""
-    nparr = np.frombuffer(data, np.uint8)
-    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-    if img is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid image format. Could not decode frame.",
-        )
-    return img
 
 
 @router.post("/passive", response_model=LivenessMetrics)
 async def check_passive_liveness(
     frame: UploadFile = File(..., description="Single live camera frame"),
-    api_key: str = Depends(verify_api_key),
+    key_id: str = Depends(verify_api_key),
 ):
     """
-    Evaluates a single camera frame for passive liveness, Moiré patterns, screen replay, or paper mask spoofing.
+    Heuristic single-frame check (blur, glare, skin chroma) on the detected face.
+    Not a certified presentation-attack-detection model.
     """
-    content = await frame.read()
-    img_bgr = decode_image_bytes(content)
-    metrics = liveness_service.evaluate_live_frame(img_bgr)
-    return metrics
+    img = await read_image(frame, "frame")
+    return await run_in_threadpool(liveness_service.evaluate_live_frame, img)
+
+
+def _evaluate_active(frames, challenges) -> LivenessMetrics:
+    faces_per_frame = [liveness_service.engine.detect_faces(f) for f in frames]
+    observations = [liveness_service.observe(f, faces) for f, faces in zip(frames, faces_per_frame)]
+    passed, steps = liveness_service.evaluate_challenges(observations, challenges)
+    middle = len(frames) // 2
+    passive = liveness_service.evaluate_live_frame(frames[middle], faces_per_frame[middle])
+    return passive.model_copy(update={"active_challenges_passed": passed, "completed_challenges": steps})
 
 
 @router.post("/active", response_model=LivenessMetrics)
 async def check_active_liveness(
     session_id: str = Form(..., description="Active KYC session ID"),
     frames: List[UploadFile] = File(..., description="Ordered keyframes during challenge execution"),
-    api_key: str = Depends(verify_api_key),
+    key_id: str = Depends(verify_api_key),
 ):
     """
-    Evaluates ordered video keyframes against the assigned challenges (Head turns, smiles, blinks).
+    Dry-run of the session's active challenges against ordered frames. Does not
+    consume the session; the authoritative check runs in /verify/full.
     """
-    session = active_sessions.get(session_id)
-    if not session:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Session {session_id} not found.",
-        )
-
-    decoded_frames: List[np.ndarray] = []
-    for f in frames:
-        content = await f.read()
-        decoded_frames.append(decode_image_bytes(content))
-
-    all_passed, updated_steps = liveness_service.verify_active_challenge_sequence(
-        decoded_frames, session.challenges
-    )
-
-    # Passive score on middle frame
-    middle_idx = len(decoded_frames) // 2
-    passive_metrics = liveness_service.evaluate_live_frame(decoded_frames[middle_idx])
-
-    return LivenessMetrics(
-        passive_score=passive_metrics.passive_score,
-        is_live_passive=passive_metrics.is_live_passive,
-        active_challenges_passed=all_passed,
-        completed_challenges=updated_steps,
-        detected_spoof_type=passive_metrics.detected_spoof_type,
-    )
+    session = load_owned_session(session_id, key_id)
+    if session.status == SessionStatus.EXPIRED:
+        raise HTTPException(status.HTTP_410_GONE, detail=f"Session {session_id} has expired.")
+    decoded = await read_frames(frames, "frames")
+    return await run_in_threadpool(_evaluate_active, decoded, session.challenges)

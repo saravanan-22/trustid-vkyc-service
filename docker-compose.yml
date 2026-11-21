@@ -1,19 +1,30 @@
-version: "3.8"
-
 services:
   trustid-api:
     build: .
     container_name: trustid-vkyc-api
     ports:
       - "8000:8000"
+    # Secrets (TRUSTID_API_KEYS, AUDIT_SIGNING_SECRET, WEBHOOK_SIGNING_SECRET)
+    # come from .env; copy .env.example and fill it in first.
+    env_file: .env
     environment:
-      - PROJECT_NAME=TrustID VKYC Verification Service
-      - DEFAULT_API_KEY=trustid_live_demo_key_2026
-      - FACE_MATCH_THRESHOLD=0.70
-      - PASSIVE_LIVENESS_THRESHOLD=0.65
-      - DEEPFAKE_MAX_RISK_SCORE=0.40
+      REDIS_URL: redis://redis:6379/0
+      WEB_CONCURRENCY: "2"
     volumes:
       - trustid-data:/app/data
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.2-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
     restart: unless-stopped
 
 volumes:
