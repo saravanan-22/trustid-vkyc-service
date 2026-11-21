@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "a93e5d87-3214-4eb5-a202-trustid-vkyc",
     "name": "TrustID Video KYC API",
-    "description": "Production-grade Video KYC & Anti-Deepfake Verification API collection. Includes sessions, 1:1 biometric matching, active/passive liveness, document OCR parsing, and cryptographic audit records.",
+    "description": "TrustID Video KYC API (reference implementation). Sessions, document checks, 1:1 face match, active/passive liveness and signed audit dossiers.\n\nSet `apiKey` in the environment to one of the server's TRUSTID_API_KEYS values. The full-verification request sends a single still photo, so it is expected to be REJECTED for ACTIVE_LIVENESS_FAILED; a real run needs the ordered webcam frames captured by the demo portal.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
@@ -13,7 +13,7 @@
     },
     {
       "key": "apiKey",
-      "value": "trustid_live_demo_key_2026",
+      "value": "",
       "type": "string"
     },
     {
@@ -41,7 +41,7 @@
               "host": ["{{baseUrl}}"],
               "path": ["health"]
             },
-            "description": "Checks the operational status of the VKYC engine and AI sub-models."
+            "description": "Reports whether the face models, server OCR and session store are actually available (503 when degraded)."
           }
         },
         {
@@ -99,7 +99,7 @@
               "host": ["{{baseUrl}}"],
               "path": ["api", "v1", "sessions", ""]
             },
-            "description": "Initializes a KYC session with randomized dynamic challenges (head yaw turns, eye blinks, smiles, voice code)."
+            "description": "Creates a single-use session with randomized head-turn / blink / smile challenges. Expires after SESSION_EXPIRY_SECONDS and is visible only to the API key that created it."
           }
         },
         {
@@ -150,7 +150,7 @@
               "host": ["{{baseUrl}}"],
               "path": ["api", "v1", "liveness", "passive"]
             },
-            "description": "Single-frame passive anti-spoofing test detecting texture frequency, Moiré patterns, and screen replay."
+            "description": "Heuristic single-frame check (blur, glare, skin chroma) on the detected face. Not a certified presentation-attack-detection model."
           }
         },
         {
@@ -183,7 +183,7 @@
               "host": ["{{baseUrl}}"],
               "path": ["api", "v1", "liveness", "active"]
             },
-            "description": "Evaluates a sequence of video keyframes against assigned session challenges."
+            "description": "Dry-run of the session's challenges against ordered frames (needs several frames showing the movement). Does not consume the session."
           }
         },
         {
@@ -216,7 +216,7 @@
               "host": ["{{baseUrl}}"],
               "path": ["api", "v1", "face", "match"]
             },
-            "description": "Performs 1:1 facial biometric matching between ID card photo and live face."
+            "description": "1:1 face verification using SFace embeddings (cosine similarity vs. threshold)."
           }
         }
       ]
@@ -244,7 +244,7 @@
                 },
                 {
                   "key": "extracted_text",
-                  "value": "GOVERNMENT OF INDIA\nAadhaar Card\nRahul Sharma\nDOB: 15/08/1994\nMALE\n9841 2341 5678",
+                  "value": "SPECIMEN - GOVERNMENT OF INDIA - AADHAAR\nName: Demo Applicant\nDOB: 15/08/1994\nGender: FEMALE\n9841 2341 5679",
                   "type": "text"
                 }
               ]
@@ -254,7 +254,7 @@
               "host": ["{{baseUrl}}"],
               "path": ["api", "v1", "document", "verify"]
             },
-            "description": "Inspects document image quality, checks for blur/glare tampering, parses fields, and extracts photo."
+            "description": "Checks image quality and face presence, extracts fields (server OCR if installed, else the supplied text) and validates Aadhaar/PAN/MRZ checksums."
           }
         }
       ]
@@ -307,7 +307,7 @@
                 },
                 {
                   "key": "extracted_ocr_text",
-                  "value": "GOVERNMENT OF INDIA\nAADHAAR\nRahul Sharma\nDOB: 15/08/1994\nMALE\n9841 2341 5678",
+                  "value": "SPECIMEN - GOVERNMENT OF INDIA - AADHAAR\nName: Demo Applicant\nDOB: 15/08/1994\nGender: FEMALE\n9841 2341 5679",
                   "type": "text"
                 }
               ]
@@ -317,7 +317,7 @@
               "host": ["{{baseUrl}}"],
               "path": ["api", "v1", "verify", "full"]
             },
-            "description": "Runs complete orchestration: Document OCR, Deepfake 2D FFT, Active/Passive Anti-Spoofing, 1:1 Face Match, and Cryptographic Audit Dossier generation."
+            "description": "Runs the full pipeline and writes a signed, hash-chained audit dossier. With the single sample photo this returns REJECTED (ACTIVE_LIVENESS_FAILED) by design; send ordered challenge frames for a real run. Each session can be verified once."
           }
         }
       ]
@@ -340,7 +340,7 @@
               "host": ["{{baseUrl}}"],
               "path": ["api", "v1", "audit", "{{verificationId}}"]
             },
-            "description": "Retrieves the SHA-256 HMAC-signed audit certificate for compliance checks."
+            "description": "Returns the dossier after recomputing its hash from the stored content and checking its HMAC signature (409 if modified)."
           }
         }
       ]

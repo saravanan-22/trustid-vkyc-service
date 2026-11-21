@@ -11,6 +11,7 @@ from client_sdk.trustid import TrustIDClient
 
 def main():
     print("=== TrustID Python Client SDK Demo ===")
+    # Reads the key from the TRUSTID_API_KEY environment variable.
     client = TrustIDClient(base_url="http://127.0.0.1:8000")
 
     # 1. Health check
@@ -29,7 +30,8 @@ def main():
     for step in session["challenges"]:
         print(f"    - Step {step['step_id']}: {step['instruction']}")
 
-    print("\nSDK ready for streaming frames and document upload.")
+    print("\nNext: capture ordered webcam frames while the applicant performs the")
+    print("challenges, then call client.verify_full(...) with those frames.")
 
 
 if __name__ == "__main__":

@@ -1,20 +1,59 @@
+import hashlib
+import hmac
 import os
-from typing import Any, Dict, List, Optional
+import time
+from typing import Any, Dict, List, Optional, Union
+
 import httpx
+
+DEFAULT_WEBHOOK_TOLERANCE_SECONDS = 300
+
+
+def verify_webhook_signature(
+    body: Union[bytes, str],
+    timestamp: str,
+    signature: str,
+    secret: str,
+    tolerance_seconds: int = DEFAULT_WEBHOOK_TOLERANCE_SECONDS,
+    now: Optional[float] = None,
+) -> bool:
+    """
+    Verifies a TrustID webhook.
+
+    Pass the *raw* request body and the `X-TrustID-Timestamp` and
+    `X-TrustID-Signature` headers, plus your WEBHOOK_SIGNING_SECRET. Returns
+    False for a bad signature or a timestamp outside the tolerance window
+    (which blocks replay of captured webhooks).
+    """
+    try:
+        ts = int(timestamp)
+    except (TypeError, ValueError):
+        return False
+    current = time.time() if now is None else now
+    if abs(current - ts) > tolerance_seconds:
+        return False
+    raw = body.decode("utf-8") if isinstance(body, bytes) else body
+    expected = hmac.new(secret.encode("utf-8"), f"{ts}.{raw}".encode("utf-8"), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, signature or "")
 
 
 class TrustIDClient:
     """
-    Official Python Client SDK for TrustID Video KYC Service.
-    Enables one-line integration for FinTech and Banking backends.
+    Python client for the TrustID VKYC API.
+
+    The API key is taken from `api_key` or the TRUSTID_API_KEY environment
+    variable. Never embed it in browser or mobile code.
     """
 
     def __init__(
         self,
         base_url: str = "http://127.0.0.1:8000",
-        api_key: str = "trustid_live_demo_key_2026",
+        api_key: Optional[str] = None,
         timeout: float = 30.0,
     ):
+        api_key = api_key or os.getenv("TRUSTID_API_KEY")
+        if not api_key:
+            raise ValueError("TrustID API key required: pass api_key or set TRUSTID_API_KEY")
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.headers = {"X-API-KEY": self.api_key}
@@ -91,8 +130,12 @@ class TrustIDClient:
         id_document_path: str,
         live_frame_paths: List[str],
         callback_url: Optional[str] = None,
+        extracted_ocr_text: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Runs full end-to-end Video KYC pipeline."""
+        """
+        Runs the full pipeline. `live_frame_paths` must be the ordered frames
+        captured while the applicant performed the session's challenges.
+        """
         files = []
         file_handles = []
         try:
@@ -108,6 +151,8 @@ class TrustIDClient:
             data = {"session_id": session_id}
             if callback_url:
                 data["callback_url"] = callback_url
+            if extracted_ocr_text:
+                data["extracted_ocr_text"] = extracted_ocr_text
 
             with httpx.Client(timeout=self.timeout) as client:
                 resp = client.post(

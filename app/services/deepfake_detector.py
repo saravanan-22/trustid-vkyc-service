@@ -7,12 +7,14 @@ from app.schemas.verification import DeepfakeMetrics
 
 class DeepfakeDetector:
     """
-    Detects synthetic media, face swaps, GAN/Diffusion artifacts,
-    and virtual webcam streams via 2D Spectral Frequency Analysis (FFT).
-    """
+    Heuristic synthetic-media signals from 2D FFT spectral statistics and chroma
+    noise.
 
-    def __init__(self):
-        pass
+    IMPORTANT: this is NOT a trained deepfake classifier and has not been
+    evaluated against modern face-swap or diffusion output. Its signals are used
+    only to route a verification to manual review, never to approve one. Replace
+    it with a trained, benchmarked model before relying on it.
+    """
 
     def analyze_frequency_spectrum(self, img_bgr: np.ndarray) -> Tuple[float, float]:
         """
@@ -41,11 +43,9 @@ class DeepfakeDetector:
         # High-frequency vs Mid-frequency energy ratio
         high_freq_mask = (r > (dim * 0.35)) & (r < center)
         mid_freq_mask = (r > (dim * 0.10)) & (r <= (dim * 0.35))
-        low_freq_mask = r <= (dim * 0.10)
 
         high_energy = np.mean(magnitude_spectrum[high_freq_mask])
         mid_energy = np.mean(magnitude_spectrum[mid_freq_mask])
-        low_energy = np.mean(magnitude_spectrum[low_freq_mask])
 
         # High-frequency anomaly ratio
         # Pure digital/synthetic frames have abnormal ratios due to upsampling filters
@@ -54,12 +54,14 @@ class DeepfakeDetector:
         # Variance of the high-frequency spectrum (checkerboard artifacts induce high local variance)
         spectral_variance = float(np.var(magnitude_spectrum[high_freq_mask]) / (np.mean(magnitude_spectrum[high_freq_mask]) ** 2 + 1e-6))
         
-        # Normalize into a risk score between 0.0 and 1.0
-        # Typical natural cameras have ratio between 0.05 and 0.22 with low spectral variance
+        # Normalize into a risk score between 0.0 and 1.0.
+        # Genuine photographs measured during development had ratios of roughly
+        # 0.29-0.42 and spectral variance below 0.8. The bounds are configurable
+        # and loosely calibrated; treat the result as a weak signal.
         anomaly_score = 0.0
-        if ratio > 0.35 or ratio < 0.02:
+        if ratio > settings.FFT_RATIO_MAX or ratio < settings.FFT_RATIO_MIN:
             anomaly_score += 0.45
-        if spectral_variance > 1.8:
+        if spectral_variance > settings.FFT_SPECTRAL_VARIANCE_MAX:
             anomaly_score += 0.40
 
         risk_score = float(np.clip(anomaly_score, 0.0, 1.0))

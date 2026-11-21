@@ -1,215 +1,242 @@
+"""
+Liveness checks.
+
+Passive: single-frame texture/colour heuristics (blur, over-exposure, skin
+chroma). These catch only crude spoofs; they are NOT a trained presentation
+attack detection (PAD) model.
+
+Active: randomized challenges checked from the five YuNet landmarks across the
+submitted frame sequence. Every challenge requires a measurable *change*
+between frames, so a static photo or a single repeated frame cannot pass.
+"""
+
+from dataclasses import dataclass
+from typing import List, Optional, Sequence, Tuple
+
 import cv2
 import numpy as np
-from typing import Dict, List, Optional, Tuple
+
 from app.core.config import settings
 from app.schemas.session import ChallengeStep, ChallengeType
 from app.schemas.verification import LivenessMetrics
-from app.services.face_detector_helper import adaptive_detector
+from app.services.face_engine import Face, face_engine
+
+MIN_FRAMES_WITH_FACE = 3
+
+# Head turn: horizontal nose offset from the eye midpoint, in inter-ocular distances.
+FRONTAL_MAX_ABS_YAW = 0.15
+TURNED_MIN_ABS_YAW = 0.30
+# Smile: mouth width / inter-ocular distance must grow by this factor vs. neutral.
+SMILE_MIN_WIDTH_GAIN = 1.10
+SMILE_MAX_ABS_YAW = 0.20
+# Blink: eye "openness" must drop below this fraction of the open level, then recover.
+BLINK_CLOSED_FRACTION = 0.65
+BLINK_REOPEN_FRACTION = 0.85
+
+
+@dataclass(frozen=True)
+class FrameObservation:
+    face_count: int
+    yaw: Optional[float] = None  # >0: subject turned to their LEFT (unmirrored image)
+    mouth_ratio: Optional[float] = None
+    eye_openness: Optional[float] = None
+
+    @property
+    def has_face(self) -> bool:
+        return self.face_count > 0 and self.yaw is not None
+
+
+# ---------------------------------------------------------------- measurements
+def yaw_proxy(face: Face, mirrored: bool = False) -> float:
+    """
+    Signed horizontal offset of the nose tip from the eye midpoint, normalised by
+    inter-ocular distance. ~0 when facing the camera. In an unmirrored camera
+    image, a subject turning to *their* left moves the nose towards image-right,
+    giving a positive value.
+    """
+    iod = face.inter_ocular_distance
+    if iod < 1e-6:
+        return 0.0
+    eye_mid_x = (face.right_eye[0] + face.left_eye[0]) / 2.0
+    value = (face.nose[0] - eye_mid_x) / iod
+    return -value if mirrored else value
+
+
+def mouth_width_ratio(face: Face) -> float:
+    iod = face.inter_ocular_distance
+    if iod < 1e-6:
+        return 0.0
+    width = float(np.hypot(face.mouth_left[0] - face.mouth_right[0], face.mouth_left[1] - face.mouth_right[1]))
+    return width / iod
+
+
+def eye_openness(img_bgr: np.ndarray, face: Face) -> float:
+    """
+    Intensity spread inside small patches centred on each eye. An open eye shows
+    dark iris against bright sclera (high spread); a closed lid is mostly skin.
+    Only meaningful *relative to other frames of the same sequence*.
+    """
+    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+    half = max(2, int(face.inter_ocular_distance * 0.22))
+    values = []
+    for cx, cy in (face.right_eye, face.left_eye):
+        x1, y1 = max(0, int(cx) - half), max(0, int(cy) - half // 2)
+        x2, y2 = min(gray.shape[1], int(cx) + half), min(gray.shape[0], int(cy) + half // 2)
+        patch = gray[y1:y2, x1:x2]
+        if patch.size:
+            values.append(float(np.std(patch)))
+    return float(np.mean(values)) if values else 0.0
+
+
+# ------------------------------------------------------------ challenge rules
+def evaluate_head_turn(observations: Sequence[FrameObservation], direction: str) -> Tuple[bool, Optional[str]]:
+    """Needs at least one frontal frame AND one frame turned the requested way."""
+    yaws = [o.yaw for o in observations if o.has_face]
+    if len(yaws) < 2:
+        return False, "INSUFFICIENT_FRAMES_WITH_FACE"
+    sign = 1.0 if direction == "LEFT" else -1.0
+    has_frontal = any(abs(y) <= FRONTAL_MAX_ABS_YAW for y in yaws)
+    has_turn = any(sign * y >= TURNED_MIN_ABS_YAW for y in yaws)
+    if not has_frontal:
+        return False, "NO_FRONTAL_FRAME"
+    if not has_turn:
+        return False, f"NO_HEAD_TURN_{direction}_DETECTED"
+    return True, None
+
+
+def evaluate_smile(observations: Sequence[FrameObservation]) -> Tuple[bool, Optional[str]]:
+    """Mouth must widen noticeably relative to the most neutral frontal frame."""
+    ratios = [
+        o.mouth_ratio
+        for o in observations
+        if o.has_face and o.mouth_ratio and abs(o.yaw) <= SMILE_MAX_ABS_YAW
+    ]
+    if len(ratios) < 2:
+        return False, "INSUFFICIENT_FRONTAL_FRAMES"
+    if max(ratios) < min(ratios) * SMILE_MIN_WIDTH_GAIN:
+        return False, "NO_SMILE_DETECTED"
+    return True, None
+
+
+def evaluate_blink(observations: Sequence[FrameObservation]) -> Tuple[bool, Optional[str]]:
+    """Requires an open -> closed -> open pattern in eye openness."""
+    values = [o.eye_openness for o in observations if o.has_face and o.eye_openness is not None]
+    if len(values) < MIN_FRAMES_WITH_FACE:
+        return False, "INSUFFICIENT_FRAMES_WITH_FACE"
+    open_level = float(np.percentile(values, 90))
+    if open_level <= 1e-6:
+        return False, "NO_BLINK_DETECTED"
+    closed_at = [i for i, v in enumerate(values) if v < open_level * BLINK_CLOSED_FRACTION]
+    is_open = [v >= open_level * BLINK_REOPEN_FRACTION for v in values]
+    for i in closed_at:
+        if any(is_open[:i]) and any(is_open[i + 1:]):
+            return True, None
+    return False, "NO_BLINK_DETECTED"
 
 
 class LivenessService:
-    """
-    Provides multi-layered active and passive anti-spoofing detection:
-    1. Passive: Texture, Moiré patterns, specular reflection, and blur analysis.
-    2. Active: Real-time challenge tracking (Head turns, eye blinks, smiles).
-    """
+    def __init__(self, engine=face_engine):
+        self.engine = engine
 
-    def __init__(self):
-        self.detector = adaptive_detector
-
-    def detect_face(self, img_bgr: np.ndarray) -> Optional[Tuple[int, int, int, int]]:
-        """
-        Detects primary face bounding box (x, y, w, h).
-        """
-        return self.detector.detect_face_bbox(img_bgr)
-
+    # ----------------------------------------------------------------- passive
     def evaluate_passive_texture(self, face_crop_bgr: np.ndarray) -> Tuple[float, Optional[str]]:
         """
-        Calculates passive anti-spoofing score based on:
-        - Texture frequency (Laplacian variance)
-        - Color distribution in HSV/YCbCr spaces (Screen displays emit excessive blue/green channel saturation)
-        - Specular reflection highlights (Screen glare / laminated paper)
+        Heuristic passive score from blur, over-exposure and skin chroma.
+        Returns (score, spoof_type) where spoof_type is "NONE" when it passes.
         """
-        if face_crop_bgr.size == 0:
-            return 0.0, "NO_FACE"
+        if face_crop_bgr is None or face_crop_bgr.size == 0:
+            return 0.0, "NO_FACE_DETECTED"
 
         gray = cv2.cvtColor(face_crop_bgr, cv2.COLOR_BGR2GRAY)
         laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
-
-        # Check blur
         if laplacian_var < settings.BLUR_MIN_LAPLACIAN_VAR:
             return 0.25, "BLURRY_OR_DEFOCUSED"
 
-        # Check color saturation (Screen replay often has distorted Cr/Cb chroma distributions)
-        ycrcb = cv2.cvtColor(face_crop_bgr, cv2.COLOR_BGR2YCrCb)
-        cr = ycrcb[:, :, 1]
-        cb = ycrcb[:, :, 2]
-        cr_mean = np.mean(cr)
-        cb_mean = np.mean(cb)
+        hsv = cv2.cvtColor(face_crop_bgr, cv2.COLOR_BGR2HSV)
+        overexposed_ratio = np.sum(hsv[:, :, 2] > 250) / float(gray.size)
+        if overexposed_ratio > 0.15:
+            return 0.30, "SCREEN_GLARE_SUSPECTED"
 
-        # Human skin typically has Cr in 133-173 and Cb in 77-127
+        ycrcb = cv2.cvtColor(face_crop_bgr, cv2.COLOR_BGR2YCrCb)
+        cr_mean = float(np.mean(ycrcb[:, :, 1]))
+        cb_mean = float(np.mean(ycrcb[:, :, 2]))
         skin_chroma_valid = (125 <= cr_mean <= 180) and (70 <= cb_mean <= 135)
 
-        # High specular reflection detection (Moiré / screen sheen)
-        hsv = cv2.cvtColor(face_crop_bgr, cv2.COLOR_BGR2HSV)
-        v = hsv[:, :, 2]
-        overexposed_ratio = np.sum(v > 250) / float(v.size)
-        if overexposed_ratio > 0.15:
-            return 0.30, "SCREEN_REPLAY"
-
-        # Base liveness score
         score = 0.50
         if skin_chroma_valid:
             score += 0.30
         if laplacian_var > 80.0:
             score += 0.15
-
-        # Normalize score
         score = float(np.clip(score, 0.0, 1.0))
-        spoof_type = "NONE" if score >= settings.PASSIVE_LIVENESS_THRESHOLD else "PAPER_OR_SCREEN"
+        spoof_type = "NONE" if score >= settings.PASSIVE_LIVENESS_THRESHOLD else "ATYPICAL_SKIN_TEXTURE"
         return score, spoof_type
 
-    def estimate_head_pose_yaw(
-        self, face_crop_bgr: np.ndarray
-    ) -> float:
-        """
-        Approximates head yaw angle (-45° to +45°) based on internal eye position
-        displacement relative to the face bounding box center.
-        Positive: Head turned right. Negative: Head turned left.
-        """
-        h, w = face_crop_bgr.shape[:2]
-        eyes = self.detector.detect_eyes(face_crop_bgr)
-        if len(eyes) < 2:
-            return 0.0
-
-        # Sort eyes left-to-right
-        eyes = sorted(eyes, key=lambda e: e[0])
-        eye_left = eyes[0]
-        eye_right = eyes[-1]
-
-        # Center between eyes
-        eye_midpoint_x = (eye_left[0] + eye_left[2] / 2 + eye_right[0] + eye_right[2] / 2) / 2.0
-        face_center_x = w / 2.0
-
-        # Displacement normalized to [-1.0, 1.0]
-        displacement = (eye_midpoint_x - face_center_x) / (w / 2.0 + 1e-6)
-        yaw_degrees = float(displacement * 45.0)
-        return yaw_degrees
-
-    def detect_smile(self, face_crop_bgr: np.ndarray) -> bool:
-        """
-        Detects if user is smiling.
-        """
-        return self.detector.detect_smile(face_crop_bgr)
-
-    def detect_eyes_open(self, face_crop_bgr: np.ndarray) -> bool:
-        """
-        Returns True if eyes are visibly detected (eyes open), False if eyes closed / blinking.
-        """
-        eyes = self.detector.detect_eyes(face_crop_bgr)
-        return len(eyes) >= 1
-
-    def verify_active_challenge_sequence(
-        self,
-        frames_bgr: List[np.ndarray],
-        challenges: List[ChallengeStep],
-    ) -> Tuple[bool, List[ChallengeStep]]:
-        """
-        Evaluates a sequence of video frames against active challenge steps.
-        """
-        if not frames_bgr:
-            return False, challenges
-
-        completed_challenges = []
-        for step in challenges:
-            step_copy = step.model_copy()
-            step_type = step_copy.challenge_type
-
-            if step_type == ChallengeType.TURN_HEAD_LEFT:
-                # Check for significant negative yaw
-                yaws = []
-                for frame in frames_bgr:
-                    box = self.detect_face(frame)
-                    if box:
-                        x, y, w, h = box
-                        face = frame[y : y + h, x : x + w]
-                        yaws.append(self.estimate_head_pose_yaw(face))
-                if any(yaw < -10.0 for yaw in yaws):
-                    step_copy.is_completed = True
-
-            elif step_type == ChallengeType.TURN_HEAD_RIGHT:
-                # Check for significant positive yaw
-                yaws = []
-                for frame in frames_bgr:
-                    box = self.detect_face(frame)
-                    if box:
-                        x, y, w, h = box
-                        face = frame[y : y + h, x : x + w]
-                        yaws.append(self.estimate_head_pose_yaw(face))
-                if any(yaw > 10.0 for yaw in yaws):
-                    step_copy.is_completed = True
-
-            elif step_type == ChallengeType.SMILE:
-                smiles = []
-                for frame in frames_bgr:
-                    box = self.detect_face(frame)
-                    if box:
-                        x, y, w, h = box
-                        face = frame[y : y + h, x : x + w]
-                        smiles.append(self.detect_smile(face))
-                if any(smiles):
-                    step_copy.is_completed = True
-
-            elif step_type == ChallengeType.BLINK_EYES:
-                # Detect blink transition: eyes open -> eyes closed -> eyes open
-                eye_states = []
-                for frame in frames_bgr:
-                    box = self.detect_face(frame)
-                    if box:
-                        x, y, w, h = box
-                        face = frame[y : y + h, x : x + w]
-                        eye_states.append(self.detect_eyes_open(face))
-                # Check if there is at least one closed state followed or preceded by open state
-                if False in eye_states and True in eye_states:
-                    step_copy.is_completed = True
-                elif len(frames_bgr) >= 3:
-                    # Natural micro-blink or multi-frame movement detected
-                    step_copy.is_completed = True
-
-            elif step_type == ChallengeType.READ_VERIFICATION_CODE:
-                # Lip motion detection / audio verification placeholder
-                step_copy.is_completed = True
-
-            completed_challenges.append(step_copy)
-
-        all_passed = all(s.is_completed for s in completed_challenges)
-        return all_passed, completed_challenges
-
-    def evaluate_live_frame(self, frame_bgr: np.ndarray) -> LivenessMetrics:
-        """
-        Evaluates a single live frame for passive liveness and anti-spoofing.
-        """
-        box = self.detect_face(frame_bgr)
-        if not box:
+    def evaluate_live_frame(self, frame_bgr: np.ndarray, faces: Optional[List[Face]] = None) -> LivenessMetrics:
+        if faces is None:
+            faces = self.engine.detect_faces(frame_bgr)
+        if not faces:
             return LivenessMetrics(
                 passive_score=0.0,
                 is_live_passive=False,
                 active_challenges_passed=False,
                 detected_spoof_type="NO_FACE_DETECTED",
+                faces_detected=0,
             )
-
-        x, y, w, h = box
-        face = frame_bgr[y : y + h, x : x + w]
-        score, spoof_type = self.evaluate_passive_texture(face)
-
-        is_live = score >= settings.PASSIVE_LIVENESS_THRESHOLD
-
+        score, spoof_type = self.evaluate_passive_texture(faces[0].crop(frame_bgr))
         return LivenessMetrics(
             passive_score=round(score, 4),
-            is_live_passive=is_live,
+            is_live_passive=score >= settings.PASSIVE_LIVENESS_THRESHOLD,
             active_challenges_passed=False,
             detected_spoof_type=spoof_type,
+            faces_detected=len(faces),
         )
+
+    # ------------------------------------------------------------------ active
+    def observe(self, frame_bgr: np.ndarray, faces: Optional[List[Face]] = None) -> FrameObservation:
+        """Measures one frame. Pass `faces` if detection already ran on it."""
+        if faces is None:
+            faces = self.engine.detect_faces(frame_bgr)
+        if not faces:
+            return FrameObservation(face_count=0)
+        face = faces[0]
+        return FrameObservation(
+            face_count=len(faces),
+            yaw=yaw_proxy(face, mirrored=settings.CAMERA_FRAMES_MIRRORED),
+            mouth_ratio=mouth_width_ratio(face),
+            eye_openness=eye_openness(frame_bgr, face),
+        )
+
+    def evaluate_challenges(
+        self, observations: Sequence[FrameObservation], challenges: Sequence[ChallengeStep]
+    ) -> Tuple[bool, List[ChallengeStep]]:
+        frames_with_face = sum(1 for o in observations if o.has_face)
+        results: List[ChallengeStep] = []
+        for step in challenges:
+            completed, reason = False, None
+            if frames_with_face < MIN_FRAMES_WITH_FACE:
+                reason = "INSUFFICIENT_FRAMES_WITH_FACE"
+            elif step.challenge_type == ChallengeType.TURN_HEAD_LEFT:
+                completed, reason = evaluate_head_turn(observations, "LEFT")
+            elif step.challenge_type == ChallengeType.TURN_HEAD_RIGHT:
+                completed, reason = evaluate_head_turn(observations, "RIGHT")
+            elif step.challenge_type == ChallengeType.SMILE:
+                completed, reason = evaluate_smile(observations)
+            elif step.challenge_type == ChallengeType.BLINK_EYES:
+                completed, reason = evaluate_blink(observations)
+            else:
+                # e.g. READ_VERIFICATION_CODE needs audio/lip-sync analysis,
+                # which this service does not implement. Never auto-pass it.
+                reason = "CHALLENGE_TYPE_NOT_SUPPORTED"
+            results.append(step.model_copy(update={"is_completed": completed, "failure_reason": reason}))
+
+        all_passed = bool(results) and all(s.is_completed for s in results)
+        return all_passed, results
+
+    def verify_active_challenge_sequence(
+        self, frames_bgr: Sequence[np.ndarray], challenges: Sequence[ChallengeStep]
+    ) -> Tuple[bool, List[ChallengeStep]]:
+        observations = [self.observe(f) for f in frames_bgr]
+        return self.evaluate_challenges(observations, challenges)
 
 
 liveness_service = LivenessService()

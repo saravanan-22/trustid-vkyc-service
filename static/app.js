@@ -1,245 +1,219 @@
+// TrustID developer demo portal.
+// The API key is typed in by the developer and kept in sessionStorage for this
+// tab only. Real integrations create sessions from a backend.
+
 let currentSession = null;
 let videoStream = null;
 let capturedFrames = [];
 let capturedIdFile = null;
 
-const API_KEY = "trustid_live_demo_key_2026";
+const FRAME_W = 640;
+const FRAME_H = 480;
+const NEUTRAL_FRAMES = 6;
+const FRAMES_PER_CHALLENGE = 8;
+const FRAME_INTERVAL_MS = 180;
+const PREP_DELAY_MS = 1200;
 
-const videoElement = document.getElementById("webcam-video");
-const canvasElement = document.getElementById("canvas-overlay");
-const canvasCtx = canvasElement.getContext("2d");
+const $ = (id) => document.getElementById(id);
+const videoElement = $("webcam-video");
+const apiKeyInput = $("api-key-input");
+const btnStartCam = $("btn-start-camera");
+const btnInitSession = $("btn-init-session");
+const btnCapture = $("btn-capture-frames");
+const btnSubmit = $("btn-submit-verify");
+const challengeBanner = $("challenge-banner");
+const challengeText = $("challenge-text");
 
-const btnStartCam = document.getElementById("btn-start-camera");
-const btnInitSession = document.getElementById("btn-init-session");
-const btnCapture = document.getElementById("btn-capture-frames");
-const btnSubmit = document.getElementById("btn-submit-verify");
-const challengeBanner = document.getElementById("challenge-banner");
-const challengeText = document.getElementById("challenge-text");
+try {
+  apiKeyInput.value = sessionStorage.getItem("trustid_api_key") || "";
+} catch (_) { /* storage unavailable */ }
+apiKeyInput.addEventListener("change", () => {
+  try { sessionStorage.setItem("trustid_api_key", apiKeyInput.value.trim()); } catch (_) {}
+});
 
-// Initialize Session
+function apiKey() {
+  const key = apiKeyInput.value.trim();
+  if (!key) throw new Error("Enter an API key first.");
+  return key;
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function showBanner(text) {
+  challengeText.textContent = text;
+  challengeBanner.style.display = "flex";
+}
+
+async function errorMessage(res) {
+  try {
+    const body = await res.json();
+    if (typeof body.detail === "string") return body.detail;
+    return JSON.stringify(body.detail || body);
+  } catch (_) {
+    return `HTTP ${res.status}`;
+  }
+}
+
+// 1. Session
 btnInitSession.addEventListener("click", async () => {
   btnInitSession.disabled = true;
-  btnInitSession.innerText = "Initializing...";
-
+  btnInitSession.textContent = "Initializing...";
   try {
     const res = await fetch("/api/v1/sessions/", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-API-KEY": API_KEY,
-      },
+      headers: { "Content-Type": "application/json", "X-API-KEY": apiKey() },
       body: JSON.stringify({
         user_id: "demo_applicant_" + Math.floor(Math.random() * 90000 + 10000),
         document_type: "AADHAAR",
       }),
     });
-
-    if (!res.ok) throw new Error("Failed to create session");
+    if (!res.ok) throw new Error(await errorMessage(res));
     currentSession = await res.json();
 
-    document.getElementById("session-id-display").innerText = currentSession.session_id;
-    document.getElementById("user-id-display").innerText = currentSession.user_id;
+    $("session-id-display").textContent = currentSession.session_id;
+    $("user-id-display").textContent = currentSession.user_id;
+    const steps = currentSession.challenges.map((c) => c.instruction).join("  ➔  ");
+    showBanner(`Challenges: ${steps}`);
 
-    const instructions = currentSession.challenges.map(c => c.instruction).join(" ➔ ");
-    challengeText.innerText = `Challenges: ${instructions} | Voice Code: ${currentSession.verification_code}`;
-    challengeBanner.style.display = "flex";
-
-    btnInitSession.innerText = "Session Active";
+    btnInitSession.textContent = "Session Active";
     btnCapture.disabled = false;
   } catch (err) {
-    alert("Error initializing session: " + err.message);
+    alert("Could not create session: " + err.message);
     btnInitSession.disabled = false;
-    btnInitSession.innerText = "Initialize Session";
+    btnInitSession.textContent = "1. Initialize Session";
   }
 });
 
-// Start Camera
+// Camera
 btnStartCam.addEventListener("click", async () => {
   try {
     videoStream = await navigator.mediaDevices.getUserMedia({
-      video: { width: 640, height: 480, facingMode: "user" },
+      video: { width: FRAME_W, height: FRAME_H, facingMode: "user" },
       audio: false,
     });
     videoElement.srcObject = videoStream;
-    btnStartCam.innerText = "Camera Connected";
+    btnStartCam.textContent = "Camera Connected";
     btnStartCam.disabled = true;
   } catch (err) {
-    console.warn("Webcam access error or denied, using simulated generator:", err);
-    alert("Webcam permission denied or unavailable. You can upload an image or test with demo frames.");
+    alert("Camera unavailable or permission denied. A live camera is required for liveness checks.");
   }
 });
 
-// Capture Frames
-btnCapture.addEventListener("click", async () => {
-  if (!currentSession) {
-    alert("Please initialize a session first.");
-    return;
+// 2. Guided capture: neutral frames first, then a burst per challenge.
+async function captureBurst(ctx, canvas, count) {
+  for (let i = 0; i < count; i++) {
+    ctx.drawImage(videoElement, 0, 0, FRAME_W, FRAME_H); // unmirrored, as the API expects
+    capturedFrames.push(await new Promise((r) => canvas.toBlob(r, "image/jpeg", 0.85)));
+    await sleep(FRAME_INTERVAL_MS);
   }
+}
+
+btnCapture.addEventListener("click", async () => {
+  if (!currentSession) return alert("Initialize a session first.");
+  if (!videoElement.srcObject) return alert("Connect the camera first.");
 
   btnCapture.disabled = true;
-  btnCapture.innerText = "Capturing 3 Frames...";
   capturedFrames = [];
+  const canvas = document.createElement("canvas");
+  canvas.width = FRAME_W;
+  canvas.height = FRAME_H;
+  const ctx = canvas.getContext("2d");
 
-  const tempCanvas = document.createElement("canvas");
-  tempCanvas.width = 640;
-  tempCanvas.height = 480;
-  const ctx = tempCanvas.getContext("2d");
+  showBanner("Look straight at the camera with a neutral face");
+  await sleep(PREP_DELAY_MS);
+  await captureBurst(ctx, canvas, NEUTRAL_FRAMES);
 
-  // Capture 3 frames with 600ms gap
-  for (let i = 0; i < 3; i++) {
-    if (videoElement.srcObject) {
-      ctx.drawImage(videoElement, 0, 0, 640, 480);
-    } else {
-      // Synthetic canvas generator for testing if camera absent
-      ctx.fillStyle = "#1e293b";
-      ctx.fillRect(0, 0, 640, 480);
-      ctx.fillStyle = "#38bdf8";
-      ctx.beginPath();
-      ctx.arc(320, 240, 100, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
-    const blob = await new Promise(resolve => tempCanvas.toBlob(resolve, "image/jpeg", 0.9));
-    capturedFrames.push(blob);
-    await new Promise(r => setTimeout(r, 600));
+  for (const step of currentSession.challenges) {
+    showBanner(`Now: ${step.instruction}`);
+    await sleep(PREP_DELAY_MS);
+    await captureBurst(ctx, canvas, FRAMES_PER_CHALLENGE);
   }
 
-  btnCapture.innerText = `Captured (${capturedFrames.length} Frames)`;
+  showBanner(`Captured ${capturedFrames.length} frames. Upload the ID image, then run verification.`);
+  btnCapture.textContent = `Captured (${capturedFrames.length} frames)`;
   btnSubmit.disabled = false;
 });
 
-// ID Card File Input
-const idInput = document.getElementById("id-card-input");
-idInput.addEventListener("change", (e) => {
+$("id-card-input").addEventListener("change", (e) => {
   if (e.target.files.length > 0) {
     capturedIdFile = e.target.files[0];
-    document.getElementById("id-file-name").innerText = capturedIdFile.name;
+    $("id-file-name").textContent = capturedIdFile.name;
   }
 });
 
-// Submit Full Verification
+// 3. Submit
 btnSubmit.addEventListener("click", async () => {
-  if (!currentSession) {
-    alert("Please create a session.");
-    return;
-  }
+  if (!currentSession) return alert("Create a session first.");
+  if (!capturedIdFile) return alert("Upload an ID document image first.");
+  if (capturedFrames.length === 0) return alert("Capture live frames first.");
 
   btnSubmit.disabled = true;
-  btnSubmit.innerText = "Running AI Models...";
+  btnSubmit.textContent = "Running checks...";
 
   const formData = new FormData();
   formData.append("session_id", currentSession.session_id);
-
-  // ID Document
-  if (capturedIdFile) {
-    formData.append("id_document", capturedIdFile);
-  } else {
-    // Generate synthetic mock ID document image
-    const idCanvas = document.createElement("canvas");
-    idCanvas.width = 600;
-    idCanvas.height = 380;
-    const ictx = idCanvas.getContext("2d");
-    ictx.fillStyle = "#ffffff";
-    ictx.fillRect(0, 0, 600, 380);
-    ictx.fillStyle = "#0284c7";
-    ictx.fillRect(0, 0, 600, 40);
-    ictx.fillStyle = "#1e293b";
-    ictx.font = "20px Arial";
-    ictx.fillText("GOVERNMENT OF INDIA - AADHAAR", 120, 28);
-    ictx.fillText("Name: Rahul Sharma", 220, 120);
-    ictx.fillText("DOB: 15/08/1994", 220, 160);
-    ictx.fillText("Gender: MALE", 220, 200);
-    ictx.font = "bold 22px Arial";
-    ictx.fillText("9841 2341 5678", 220, 270);
-    // ID Photo box
-    ictx.fillStyle = "#94a3b8";
-    ictx.fillRect(30, 80, 150, 180);
-
-    const idBlob = await new Promise(resolve => idCanvas.toBlob(resolve, "image/jpeg", 0.95));
-    formData.append("id_document", idBlob, "mock_aadhaar.jpg");
-  }
-
-  // Live Frames
-  if (capturedFrames.length === 0) {
-    // Single fallback frame
-    const fCanvas = document.createElement("canvas");
-    fCanvas.width = 640;
-    fCanvas.height = 480;
-    const fctx = fCanvas.getContext("2d");
-    fctx.fillStyle = "#334155";
-    fctx.fillRect(0, 0, 640, 480);
-    const fb = await new Promise(resolve => fCanvas.toBlob(resolve, "image/jpeg", 0.9));
-    formData.append("live_frames", fb, "live_frame_0.jpg");
-  } else {
-    capturedFrames.forEach((blob, idx) => {
-      formData.append("live_frames", blob, `live_frame_${idx}.jpg`);
-    });
-  }
+  formData.append("id_document", capturedIdFile);
+  capturedFrames.forEach((blob, i) => formData.append("live_frames", blob, `live_frame_${i}.jpg`));
+  const ocrText = $("ocr-text-input").value.trim();
+  if (ocrText) formData.append("extracted_ocr_text", ocrText);
 
   try {
     const res = await fetch("/api/v1/verify/full", {
       method: "POST",
-      headers: {
-        "X-API-KEY": API_KEY,
-      },
+      headers: { "X-API-KEY": apiKey() },
       body: formData,
     });
-
-    if (!res.ok) {
-      const errData = await res.json();
-      throw new Error(errData.detail || "Verification failed");
-    }
-
-    const data = await res.json();
-    renderResults(data);
-    btnSubmit.innerText = "Completed";
+    if (!res.ok) throw new Error(await errorMessage(res));
+    renderResults(await res.json());
+    btnSubmit.textContent = "Completed (create a new session to retry)";
   } catch (err) {
     alert("Verification error: " + err.message);
     btnSubmit.disabled = false;
-    btnSubmit.innerText = "Run Full VKYC Verification";
+    btnSubmit.textContent = "🚀 3. Run Full VKYC Verification";
   }
 });
 
-function renderResults(data) {
-  const dossier = data.dossier;
+function setBar(scoreId, barId, value, suffix = "") {
+  const pct = Math.max(0, Math.min(100, Math.round(value * 100)));
+  $(scoreId).textContent = `${pct}%${suffix}`;
+  $(barId).style.width = `${pct}%`;
+}
 
-  // Verdict Banner
-  const verdictBanner = document.getElementById("verdict-banner");
-  verdictBanner.innerText = `VERDICT: ${dossier.verdict}`;
-  verdictBanner.className = "verdict-banner";
-  if (dossier.verdict === "APPROVED") {
-    verdictBanner.classList.add("verdict-approved");
-  } else if (dossier.verdict === "REVIEW_REQUIRED") {
-    verdictBanner.classList.add("verdict-review");
-  } else {
-    verdictBanner.classList.add("verdict-rejected");
+function renderResults(data) {
+  const d = data.dossier;
+
+  const banner = $("verdict-banner");
+  banner.textContent = `VERDICT: ${d.verdict}`;
+  banner.className = "verdict-banner " + (
+    d.verdict === "APPROVED" ? "verdict-approved" : d.verdict === "REVIEW_REQUIRED" ? "verdict-review" : "verdict-rejected"
+  );
+
+  setBar("score-face", "bar-face", d.face_match.match_score, ` (threshold ${Math.round(d.face_match.threshold * 100)}%)`);
+  setBar("score-liveness", "bar-liveness", d.liveness.passive_score);
+  setBar("score-deepfake", "bar-deepfake", d.deepfake.synthetic_risk_score, " (risk)");
+
+  const doc = d.document;
+  $("doc-type-val").textContent = doc.document_type;
+  $("doc-number-val").textContent = doc.extracted_data.document_number || "not detected";
+  $("doc-name-val").textContent = doc.extracted_data.full_name || "not detected";
+  $("doc-source-val").textContent = doc.text_source;
+
+  const list = $("reasons-list");
+  list.replaceChildren();
+  const reasons = [
+    ...d.rejection_reasons.map((r) => `Rejected: ${r}`),
+    ...d.review_reasons.map((r) => `Review: ${r}`),
+  ];
+  if (reasons.length === 0) reasons.push("All checks passed.");
+  for (const text of reasons) {
+    const li = document.createElement("li");
+    li.textContent = text;
+    list.appendChild(li);
   }
 
-  // Face Match Score
-  const faceScore = Math.round(dossier.face_match.match_score * 100);
-  document.getElementById("score-face").innerText = `${faceScore}%`;
-  document.getElementById("bar-face").style.width = `${faceScore}%`;
-
-  // Liveness Score
-  const livenessScore = Math.round(dossier.liveness.passive_score * 100);
-  document.getElementById("score-liveness").innerText = `${livenessScore}%`;
-  document.getElementById("bar-liveness").style.width = `${livenessScore}%`;
-
-  // Deepfake Risk Score (Lower is safer)
-  const dfRisk = Math.round(dossier.deepfake.synthetic_risk_score * 100);
-  document.getElementById("score-deepfake").innerText = `${dfRisk}% (Risk)`;
-  document.getElementById("bar-deepfake").style.width = `${dfRisk}%`;
-
-  // Document OCR Summary
-  const doc = dossier.document;
-  document.getElementById("doc-number-val").innerText = doc.extracted_data.document_number || "Verified";
-  document.getElementById("doc-name-val").innerText = doc.extracted_data.full_name || "Rahul Sharma";
-  document.getElementById("doc-type-val").innerText = doc.document_type;
-
-  // Cryptographic Audit Hash
-  document.getElementById("audit-hash-display").innerText = dossier.tamper_proof_audit_hash;
-  document.getElementById("audit-sig-display").innerText = dossier.signature;
-
-  // Results Section Reveal
-  document.getElementById("results-panel").style.display = "block";
+  $("audit-hash-display").textContent = d.tamper_proof_audit_hash;
+  $("audit-sig-display").textContent = d.signature;
+  $("results-panel").style.display = "block";
+  const placeholder = $("results-placeholder");
+  if (placeholder) placeholder.style.display = "none";
 }
